@@ -1,13 +1,9 @@
-"""Unit tests for the pure hourly-price statistics helpers.
+"""Unittests voor de statistiekfuncties over uurprijzen."""
 
-No Home Assistant dependency, same as test_parser.py/test_pricing.py.
-"""
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import datetime, timedelta, timezone
-
-import pytest
+from datetime import UTC, datetime, timedelta
 
 from custom_components.budgetthuis.stats import (
     average,
@@ -21,7 +17,7 @@ from custom_components.budgetthuis.stats import (
 
 @dataclass
 class _Hour:
-    """Stands in for coordinator.PricedHour - stats.py only needs start/end/price."""
+    """Vervangt coordinator.PricedHour: alleen start, end en price zijn nodig."""
 
     start: datetime
     end: datetime
@@ -29,9 +25,13 @@ class _Hour:
 
 
 def _hours(*prices: float | None) -> list[_Hour]:
-    base = datetime(2026, 7, 29, 0, 0, tzinfo=timezone.utc)
+    base = datetime(2026, 7, 29, 0, 0, tzinfo=UTC)
     return [
-        _Hour(start=base + timedelta(hours=i), end=base + timedelta(hours=i + 1), price=price)
+        _Hour(
+            start=base + timedelta(hours=i),
+            end=base + timedelta(hours=i + 1),
+            price=price,
+        )
         for i, price in enumerate(prices)
     ]
 
@@ -65,7 +65,8 @@ def test_average_lowest_highest_of_empty_or_all_missing() -> None:
 
 
 def test_cheapest_period_picks_the_lowest_average_run() -> None:
-    # average = 0.2; two below-average runs: [0.1] and [0.05, 0.1] - the second has the lower average.
+    # gemiddelde = 0,2; twee reeksen onder het gemiddelde: [0,1] en [0,05, 0,1];
+    # de tweede heeft het laagste gemiddelde.
     hours = _hours(0.1, 0.3, 0.05, 0.1, 0.4)
 
     start, end, run_average = cheapest_period(hours)
@@ -76,7 +77,8 @@ def test_cheapest_period_picks_the_lowest_average_run() -> None:
 
 
 def test_most_expensive_period_picks_the_highest_average_run() -> None:
-    # average = 0.2; two above-average runs: [0.3] and [0.5, 0.4] - the second has the higher average.
+    # gemiddelde = 0,2; twee reeksen boven het gemiddelde: [0,3] en [0,5, 0,4];
+    # de tweede heeft het hoogste gemiddelde.
     hours = _hours(0.3, 0.1, 0.05, 0.5, 0.4)
 
     start, end, run_average = most_expensive_period(hours)
@@ -92,11 +94,12 @@ def test_periods_are_none_without_data() -> None:
 
 
 def test_most_expensive_period_none_when_every_hour_is_identical() -> None:
-    # Every hour equals the average, so there's no above-average run.
+    # Elk uur is gelijk aan het gemiddelde, dus er is geen reeks erboven.
     hours = _hours(0.2, 0.2, 0.2)
 
     assert most_expensive_period(hours) is None
-    # But the whole day is a (tied) below-average run, so cheapest_period still finds it.
+    # Maar de hele dag is (gelijk) een reeks onder het gemiddelde, dus
+    # cheapest_period vindt die wel.
     start, end, run_average = cheapest_period(hours)
     assert start == hours[0].start
     assert end == hours[-1].end
@@ -104,8 +107,26 @@ def test_most_expensive_period_none_when_every_hour_is_identical() -> None:
 
 
 def test_periods_skip_hours_with_missing_price() -> None:
-    # None breaks runs, same as an hour that's plainly not part of any block.
+    # None onderbreekt reeksen, net als een uur dat duidelijk buiten elk blok valt.
     hours = _hours(0.05, None, 0.4)
 
     start, end, run_average = cheapest_period(hours)
     assert (start, end, run_average) == (hours[0].start, hours[0].end, 0.05)
+
+
+def test_hour_for_tells_the_repeated_autumn_hour_apart() -> None:
+    """Dezelfde tzinfo en klokkijd moeten toch op het echte tijdstip matchen."""
+    from zoneinfo import ZoneInfo
+
+    ams = ZoneInfo("Europe/Amsterdam")
+    summer = datetime(2026, 10, 25, 2, 0, tzinfo=ams, fold=0)
+    winter = datetime(2026, 10, 25, 2, 0, tzinfo=ams, fold=1)
+    after = datetime(2026, 10, 25, 3, 0, tzinfo=ams)
+    hours = [_Hour(summer, winter, 0.1), _Hour(winter, after, 0.2)]
+
+    assert (
+        hour_for(hours, datetime(2026, 10, 25, 2, 30, tzinfo=ams, fold=0)).price == 0.1
+    )
+    assert (
+        hour_for(hours, datetime(2026, 10, 25, 2, 30, tzinfo=ams, fold=1)).price == 0.2
+    )
